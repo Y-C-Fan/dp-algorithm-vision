@@ -1,0 +1,5 @@
+{
+  "name": "Coin Change Logic Visualizer",
+  "description": "An interactive educational tool to visualize the difference between Combinations and Permutations in the Unbounded Knapsack problem (Coin Change II), specifically explaining why the order of loops matters.",
+  "requestFramePermissions": []
+}
