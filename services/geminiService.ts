@@ -1,9 +1,11 @@
 
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 import { AlgorithmMode } from "../types";
 
-// Always use named parameter for apiKey and obtain directly from process.env.API_KEY
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+// Simple cache to prevent redundant API calls
+const explanationCache: Record<string, string> = {};
 
 export const getStepExplanation = async (
   mode: AlgorithmMode,
@@ -12,6 +14,9 @@ export const getStepExplanation = async (
   prevValue: number,
   addedValue: number
 ) => {
+  const cacheKey = `${mode}-${currentCoin}-${currentAmount}-${prevValue}-${addedValue}`;
+  if (explanationCache[cacheKey]) return explanationCache[cacheKey];
+
   const prompt = `
     In the dynamic programming "Coin Change II" problem (Unbounded Knapsack):
     The current mode is ${mode === AlgorithmMode.COMBINATION ? 'Combinations (Coin-first)' : 'Permutations (Amount-first)'}.
@@ -26,15 +31,18 @@ export const getStepExplanation = async (
       model: 'gemini-3-flash-preview',
       contents: prompt,
       config: {
-        maxOutputTokens: 200,
-        temperature: 0.7,
+        maxOutputTokens: 150,
+        temperature: 0.5,
       },
     });
-    // Extract text output using the .text property
-    return response.text;
-  } catch (error) {
-    console.error("Gemini Error:", error);
-    return "解析步骤中...";
+    const text = response.text || "";
+    explanationCache[cacheKey] = text;
+    return text;
+  } catch (error: any) {
+    if (error?.message?.includes('429')) {
+      console.warn("Rate limit exceeded (429). Using fallback.");
+    }
+    return ""; // Return empty to use local fallback
   }
 };
 
@@ -51,15 +59,11 @@ export const getDeepComparison = async (amount: number, coins: number[]) => {
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-pro-preview',
+      model: 'gemini-3-flash-preview',
       contents: prompt,
-      config: {
-        thinkingConfig: { thinkingBudget: 2000 }
-      }
     });
-    // Extract text output using the .text property
     return response.text;
   } catch (error) {
-    return "无法获取深度解析，请检查网络连接。";
+    return "解析引擎繁忙，请稍后再试。";
   }
 };

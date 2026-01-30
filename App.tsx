@@ -17,6 +17,7 @@ const App: React.FC = () => {
   const [explanation, setExplanation] = useState<string>('');
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastAiCallRef = useRef<number>(0);
 
   const generateSteps = useCallback(() => {
     const localSteps: Step[] = [];
@@ -31,7 +32,7 @@ const App: React.FC = () => {
       dpBefore: [...dp],
       dpAfter: [...dp],
       addedValue: 0,
-      description: "初始化状态：dp[0] = 1 (代表金额为0时只有一种‘不选’的方式)",
+      description: "初始化状态：dp[0] = 1 (金额为0有一种方案)",
       activeLine: 0,
       formula: null
     });
@@ -41,7 +42,7 @@ const App: React.FC = () => {
         const coin = coins[i];
         localSteps.push({
           coin, amount: coin, coinIdx: i, dpBefore: [...dp], dpAfter: [...dp], addedValue: 0,
-          description: `【外层循环】开始处理第 ${i + 1} 种硬币: ${coin}`,
+          description: `外层循环：选择硬币 ${coin}`,
           activeLine: 0, formula: null
         });
 
@@ -57,7 +58,7 @@ const App: React.FC = () => {
             dpBefore: [...dp].map((v, idx) => idx === j ? prevValue : v),
             dpAfter: [...dp],
             addedValue: dependencyValue,
-            description: `【内层循环】更新金额 ${j}。当前 dp[${j}] = ${prevValue}，加上 dp[${j}-${coin}] 的 ${dependencyValue} 种方案`,
+            description: `更新 dp[${j}]，使用硬币 ${coin}`,
             activeLine: 2,
             formula: {
               target: j,
@@ -72,7 +73,7 @@ const App: React.FC = () => {
       for (let j = 1; j <= amount; j++) {
         localSteps.push({
           coin: null, amount: j, coinIdx: 0, dpBefore: [...dp], dpAfter: [...dp], addedValue: 0,
-          description: `【外层循环】当前尝试凑出的目标金额: ${j}`,
+          description: `外层循环：当前目标金额 ${j}`,
           activeLine: 0, formula: null
         });
 
@@ -90,7 +91,7 @@ const App: React.FC = () => {
               dpBefore: [...dp].map((v, idx) => idx === j ? prevValue : v),
               dpAfter: [...dp],
               addedValue: dependencyValue,
-              description: `【内层循环】在凑金额 ${j} 时，尝试最后放入硬币 ${coin}，方案数增加 dp[${j}-${coin}]`,
+              description: `更新 dp[${j}]，放入最后一个硬币 ${coin}`,
               activeLine: 2,
               formula: {
                 target: j,
@@ -109,7 +110,6 @@ const App: React.FC = () => {
 
   useEffect(() => { generateSteps(); }, [generateSteps]);
 
-  // Handle auto-playing
   useEffect(() => {
     if (isPlaying && currentStep < steps.length - 1) {
       timerRef.current = setTimeout(() => { setCurrentStep(prev => prev + 1); }, playbackSpeed);
@@ -117,16 +117,11 @@ const App: React.FC = () => {
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };
   }, [isPlaying, currentStep, steps.length, playbackSpeed]);
 
-  // Handle single step keyboard navigation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowRight') {
-        handleNextStep();
-      } else if (e.key === 'ArrowLeft') {
-        handlePrevStep();
-      } else if (e.key === ' ') {
-        setIsPlaying(p => !p);
-      }
+      if (e.key === 'ArrowRight') handleNextStep();
+      else if (e.key === 'ArrowLeft') handlePrevStep();
+      else if (e.key === ' ') setIsPlaying(p => !p);
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -146,7 +141,11 @@ const App: React.FC = () => {
     const fetchStepDetail = async () => {
       if (currentStep >= 0 && steps[currentStep]) {
         const s = steps[currentStep];
-        if (s.formula) {
+        
+        // Rate limit mitigation: Only call AI if not playing too fast, or use cached
+        const now = Date.now();
+        if (s.formula && (now - lastAiCallRef.current > 1000 || !isPlaying)) {
+          lastAiCallRef.current = now;
           const desc = await getStepExplanation(mode, s.coin || 0, s.amount, s.formula.current, s.addedValue);
           setExplanation(desc || s.description);
         } else {
@@ -155,13 +154,13 @@ const App: React.FC = () => {
       }
     };
     fetchStepDetail();
-  }, [currentStep, mode, steps]);
+  }, [currentStep, mode, steps, isPlaying]);
 
   const currentStepData = steps[currentStep] || steps[0];
 
   return (
     <div className="min-h-screen p-4 md:p-8 bg-slate-100 font-sans text-slate-900">
-      <div className="max-w-7xl mx-auto space-y-6">
+      <div className="max-w-[1600px] mx-auto space-y-6">
         
         {/* Header */}
         <header className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -185,10 +184,10 @@ const App: React.FC = () => {
           </div>
         </header>
 
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
           
-          {/* Left: Code Viewer & Controls */}
-          <div className="lg:col-span-4 space-y-6">
+          {/* Left Column: Code Viewer & Controls (Now wider) */}
+          <div className="xl:col-span-5 space-y-6">
             <CodeViewer 
               mode={mode} 
               activeLine={currentStepData?.activeLine ?? 0} 
@@ -204,37 +203,14 @@ const App: React.FC = () => {
               </h3>
               
               <div className="space-y-6">
-                {/* Manual Controls */}
                 <div className="flex items-center justify-between gap-2">
-                  <button 
-                    onClick={handlePrevStep}
-                    disabled={currentStep === 0}
-                    className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 disabled:opacity-30 rounded-xl font-bold text-slate-700 transition-colors"
-                    title="上一步 (左方向键)"
-                  >
-                    ← Step
+                  <button onClick={handlePrevStep} disabled={currentStep === 0} className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 disabled:opacity-30 rounded-xl font-bold text-slate-700 transition-colors">← Step</button>
+                  <button onClick={() => setIsPlaying(!isPlaying)} className={`flex-[1.5] py-3 rounded-xl font-bold flex items-center justify-center gap-2 shadow-sm transition-all active:scale-95 ${isPlaying ? 'bg-amber-100 text-amber-700' : 'bg-slate-800 text-white'}`}>
+                    {isPlaying ? 'PAUSE' : 'RUN ALL'}
                   </button>
-                  <button 
-                    onClick={() => setIsPlaying(!isPlaying)}
-                    className={`flex-[1.5] py-3 rounded-xl font-bold flex items-center justify-center gap-2 shadow-sm transition-all active:scale-95 ${isPlaying ? 'bg-amber-100 text-amber-700' : 'bg-slate-800 text-white'}`}
-                  >
-                    {isPlaying ? (
-                      <><span className="w-2 h-4 bg-amber-700 inline-block mr-0.5"></span><span className="w-2 h-4 bg-amber-700 inline-block"></span> PAUSE</>
-                    ) : (
-                      <><span className="w-0 h-0 border-t-[8px] border-t-transparent border-l-[12px] border-l-white border-b-[8px] border-b-transparent"></span> RUN ALL</>
-                    )}
-                  </button>
-                  <button 
-                    onClick={handleNextStep}
-                    disabled={currentStep >= steps.length - 1}
-                    className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 disabled:opacity-30 rounded-xl font-bold text-slate-700 transition-colors"
-                    title="下一步 (右方向键)"
-                  >
-                    Step →
-                  </button>
+                  <button onClick={handleNextStep} disabled={currentStep >= steps.length - 1} className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 disabled:opacity-30 rounded-xl font-bold text-slate-700 transition-colors">Step →</button>
                 </div>
 
-                {/* Simulation Params */}
                 <div className="grid grid-cols-2 gap-4 border-t pt-4">
                   <div>
                     <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">目标金额</label>
@@ -247,24 +223,24 @@ const App: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">播放速度 ({playbackSpeed}ms)</label>
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">速度 ({playbackSpeed}ms)</label>
                   <input type="range" min="100" max="2000" step="100" value={playbackSpeed} onChange={e => setPlaybackSpeed(+e.target.value)} className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600 mt-2" />
                 </div>
               </div>
             </div>
 
-            <div className="bg-indigo-900 text-indigo-100 p-4 rounded-xl text-xs space-y-2 opacity-80">
-              <p className="font-bold flex items-center gap-1 text-white">变量状态面板:</p>
-              <div className="grid grid-cols-2 gap-2 text-sm font-mono mt-2">
-                <div className="bg-indigo-800 p-2 rounded">
+            <div className="bg-indigo-900 text-indigo-100 p-4 rounded-xl text-xs space-y-2">
+              <p className="font-bold flex items-center gap-1 text-white underline decoration-indigo-500 underline-offset-4 mb-2">当前状态变量</p>
+              <div className="grid grid-cols-2 gap-3 text-sm font-mono">
+                <div className="bg-indigo-800/50 p-2 rounded border border-indigo-700">
                   <div className="text-[10px] text-indigo-300 uppercase">i (Index)</div>
                   <div className="font-bold text-white">{currentStepData?.coinIdx ?? '-'}</div>
                 </div>
-                <div className="bg-indigo-800 p-2 rounded">
+                <div className="bg-indigo-800/50 p-2 rounded border border-indigo-700">
                   <div className="text-[10px] text-indigo-300 uppercase">coins[i]</div>
                   <div className="font-bold text-white">{currentStepData?.coin ?? '-'}</div>
                 </div>
-                <div className="bg-indigo-800 p-2 rounded col-span-2">
+                <div className="bg-indigo-800/50 p-2 rounded col-span-2 border border-indigo-700">
                   <div className="text-[10px] text-indigo-300 uppercase">j (Current Amount)</div>
                   <div className="font-bold text-white text-center text-lg">{currentStepData?.amount ?? '-'}</div>
                 </div>
@@ -272,18 +248,14 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          {/* Right: Visualizer */}
-          <div className="lg:col-span-8 space-y-6">
-            
+          {/* Right Column: Visualizer (Now slightly narrower but fits well) */}
+          <div className="xl:col-span-7 space-y-6">
             <FormulaTrace formula={currentStepData?.formula} coin={currentStepData?.coin} />
 
-            <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 min-h-[420px] flex flex-col justify-between">
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 min-h-[420px] flex flex-col justify-between">
               <div>
                 <div className="flex justify-between items-center mb-10">
-                  <div className="flex flex-col">
-                    <h2 className="text-xl font-bold text-slate-800">DP 状态演变</h2>
-                    <p className="text-xs text-slate-400">正在计算: dp[j] += dp[j - coin]</p>
-                  </div>
+                  <h2 className="text-xl font-bold text-slate-800">DP 状态演变</h2>
                   <div className="flex gap-4 text-xs font-mono bg-slate-50 px-4 py-2 rounded-full border">
                     <span className="text-blue-600 font-bold">coin: {currentStepData?.coin ?? '-'}</span>
                     <span className="text-green-600 font-bold">amount: {currentStepData?.amount ?? '-'}</span>
@@ -298,27 +270,16 @@ const App: React.FC = () => {
                 />
               </div>
 
-              {/* Dynamic Explanation */}
               <div className="mt-12">
                 <div className="bg-blue-50 p-5 rounded-2xl border-l-4 border-blue-500 relative shadow-sm">
                    <div className="absolute -top-3 left-6 bg-blue-500 text-white text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-tighter">AI 步骤解析</div>
-                   <p className="text-blue-900 leading-relaxed">{explanation}</p>
+                   <p className="text-blue-900 leading-relaxed font-medium">{explanation || "计算中..."}</p>
                 </div>
               </div>
             </div>
 
-            {/* Slider & Progress */}
             <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-6">
-               <div className="flex-1">
-                  <input 
-                    type="range" 
-                    min="0" 
-                    max={steps.length - 1} 
-                    value={currentStep} 
-                    onChange={e => { setIsPlaying(false); setCurrentStep(+e.target.value); }} 
-                    className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600" 
-                  />
-               </div>
+               <input type="range" min="0" max={steps.length - 1} value={currentStep} onChange={e => { setIsPlaying(false); setCurrentStep(+e.target.value); }} className="flex-1 h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600" />
                <div className="flex items-center gap-2 bg-slate-100 px-3 py-1 rounded-lg">
                   <span className="text-slate-400 text-[10px] font-bold uppercase">Step</span>
                   <span className="text-blue-600 font-mono font-bold text-sm">{currentStep + 1}</span>
